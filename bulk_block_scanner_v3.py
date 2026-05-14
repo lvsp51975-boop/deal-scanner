@@ -556,20 +556,36 @@ def scan_once():
 def main():
     log.info('Block/Bulk Deal Scanner v3 started')
     log.info(f'Sources: NSE + NSE CSV + Trendlyne + Moneycontrol + scanx.trade')
-    log.info(f'Refresh: {REFRESH_MINUTES} min | Telegram: {"OK" if TELEGRAM_TOKEN else "NOT SET"} | Email: {"OK" if EMAIL_FROM else "NOT SET"}')
+    log.info(f'Telegram: {"OK" if TELEGRAM_TOKEN else "NOT SET"} | Email: {"OK" if EMAIL_FROM else "NOT SET"}')
 
-    while True:
-        try:
-            now = datetime.now()
-            is_market = (now.weekday() < 5) and (9 <= now.hour < 16 or (now.hour == 16 and now.minute <= 30))
-            if is_market:
-                scan_once()
-            else:
-                log.info(f'Market closed ({now.strftime("%a %H:%M")}), skipping')
-        except Exception as e:
-            log.error(f'Scan error: {e}')
-        log.info(f'Sleeping {REFRESH_MINUTES} min...')
-        time.sleep(REFRESH_MINUTES * 60)
+    # GitHub Actions mode: single scan, no loop
+    # Local mode (REFRESH_MINUTES set): loop with sleep
+    github_mode = os.getenv('GITHUB_ACTIONS', 'false') == 'true'
+
+    if github_mode:
+        # Single scan — GitHub cron handles scheduling
+        log.info('Mode: GitHub Actions (single scan)')
+        now = datetime.now()
+        is_market = (now.weekday() < 5) and (9 <= now.hour < 16 or (now.hour == 16 and now.minute <= 30))
+        if is_market:
+            scan_once()
+        else:
+            log.info(f'Market closed ({now.strftime("%a %H:%M IST")}), skipping')
+    else:
+        # Local PC mode: loop every 30 min
+        log.info(f'Mode: Local PC (refresh every {REFRESH_MINUTES} min)')
+        while True:
+            try:
+                now = datetime.now()
+                is_market = (now.weekday() < 5) and (9 <= now.hour < 16 or (now.hour == 16 and now.minute <= 30))
+                if is_market:
+                    scan_once()
+                else:
+                    log.info(f'Market closed ({now.strftime("%a %H:%M")}), skipping')
+            except Exception as e:
+                log.error(f'Scan error: {e}')
+            log.info(f'Sleeping {REFRESH_MINUTES} min...')
+            time.sleep(REFRESH_MINUTES * 60)
 
 if __name__ == '__main__':
     main()
