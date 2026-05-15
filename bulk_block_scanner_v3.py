@@ -465,6 +465,7 @@ def fetch_moneycontrol():
                 soup = BeautifulSoup(driver.page_source, 'lxml')
                 tables = soup.find_all('table')
                 log.info(f'Moneycontrol {deal_type}: {len(tables)} tables found')
+                log.info(f'MC {deal_type} all table headers: {[th.get_text(strip=True).lower() for t in tables[:3] for th in t.find_all("tr")[:1] for th in th.find_all(["th","td"])]}')
 
                 for table in tables:
                     rows = table.find_all('tr')
@@ -475,11 +476,14 @@ def fetch_moneycontrol():
                     if not any('symbol' in h or 'scrip' in h or 'stock' in h for h in headers):
                         continue
 
-                    sym_idx    = next((i for i, h in enumerate(headers) if 'symbol' in h or 'scrip' in h or 'stock' in h), 0)
-                    client_idx = next((i for i, h in enumerate(headers) if 'client' in h or 'name' in h or 'entity' in h), 1)
-                    bs_idx     = next((i for i, h in enumerate(headers) if 'buy' in h or 'sell' in h or 'b/s' in h or 'type' in h), 2)
-                    qty_idx    = next((i for i, h in enumerate(headers) if 'qty' in h or 'quant' in h or 'share' in h), 3)
-                    price_idx  = next((i for i, h in enumerate(headers) if 'price' in h or 'rate' in h), 4)
+                    # MC headers: symbol/scrip, company, client name, buy/sell, qty, avg price
+                    sym_idx    = next((i for i, h in enumerate(headers) if h in ('symbol','scrip') or 'symbol' in h), 0)
+                    client_idx = next((i for i, h in enumerate(headers) if 'client' in h), 2)
+                    if client_idx == 2 and len(headers) > 2 and 'client' not in headers[2]:
+                        client_idx = next((i for i, h in enumerate(headers) if 'name' in h or 'client' in h or 'entity' in h), 1)
+                    bs_idx     = next((i for i, h in enumerate(headers) if 'buy' in h or 'sell' in h or 'b/s' in h or 'tran' in h), 3)
+                    qty_idx    = next((i for i, h in enumerate(headers) if 'qty' in h or 'quant' in h or 'share' in h or 'volume' in h), 4)
+                    price_idx  = next((i for i, h in enumerate(headers) if 'price' in h or 'rate' in h or 'avg' in h), 5)
 
                     for row in rows[1:]:
                         cols = [td.get_text(strip=True) for td in row.find_all('td')]
