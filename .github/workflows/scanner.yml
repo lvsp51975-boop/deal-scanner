@@ -29,8 +29,8 @@ jobs:
       - name: Run scanner
         run: python bulk_block_scanner_v3.py
         env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_TOKEN: ${{ 8580535996:AAF52adlHTH5y2zQTyJK4RhRgptlFQ6W13Y }}
+          TELEGRAM_CHAT_ID: ${{ 384847854 }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
