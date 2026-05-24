@@ -6,8 +6,11 @@ Date range: Current week Monday to today
 Output: Console table + scanx_deals_this_week.csv
 """
 
-import time, csv, sys
+import time, csv, sys, os, requests as _requests
 from datetime import date, timedelta, datetime
+
+TELEGRAM_TOKEN   = os.getenv('TELEGRAM_TOKEN', '')
+TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
 
 # ─── TARGETS ──────────────────────────────────────────────────────────────
 MF_KEYWORDS = [
@@ -343,6 +346,46 @@ def save_csv(deals, filename='scanx_deals_this_week.csv'):
         w.writerows(deals)
     print(f"[*] Saved: {filename} ({len(deals)} rows)")
 
+# ─── TELEGRAM ─────────────────────────────────────────────────────────────
+def send_telegram(deals):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[!] Telegram: NOT SET — skipping")
+        return
+    monday, today = get_week_range()
+    icons = {'MF':'🏦','BANK':'🏛','FI/FII':'🛡'}
+    lines = [f"📊 *Block/Bulk Deals — Week {monday.strftime('%d %b')} to {today.strftime('%d %b %Y')}*\n"]
+    lines.append(f"Total: {len(deals)} deals | MF / Bank / FI / Insurance\n")
+
+    for cat in ['MF','BANK','FI/FII']:
+        cat_deals = [d for d in deals if d['cat'] == cat]
+        if not cat_deals:
+            continue
+        icon = icons.get(cat,'💼')
+        lines.append(f"\n{icon} *{cat}* ({len(cat_deals)} deals)")
+        for d in cat_deals:
+            act = '🟢' if 'BUY' in d['action'] else '🔴'
+            val = d['value'] or '-'
+            lines.append(f"  {act} *{d['stock']}* [{d['type']}] — {d['date']}")
+            lines.append(f"    {d['client'][:35]}")
+            lines.append(f"    Qty: {d['qty']} | ₹{val} Cr")
+
+    msg = '\n'.join(lines)
+    # Split if > 4096 chars
+    chunks = [msg[i:i+4000] for i in range(0, len(msg), 4000)]
+    for chunk in chunks:
+        try:
+            r = _requests.post(
+                f'https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage',
+                json={'chat_id': TELEGRAM_CHAT_ID, 'text': chunk, 'parse_mode': 'Markdown'},
+                timeout=10
+            )
+            if r.status_code == 200:
+                print(f"[*] Telegram: sent OK")
+            else:
+                print(f"[!] Telegram error: {r.status_code} {r.text}")
+        except Exception as e:
+            print(f"[!] Telegram failed: {e}")
+
 # ─── MAIN ─────────────────────────────────────────────────────────────────
 def main():
     print("\n" + "="*60)
@@ -359,6 +402,7 @@ def main():
 
     print_table(deals)
     save_csv(deals)
+    send_telegram(deals)
 
     if not deals:
         print("[!] No deals found. If Chrome is not installed:")
