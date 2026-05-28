@@ -1,7 +1,8 @@
 """
-Bulk & Block Deal Scanner v3 - FINAL CLEAN
-Sources: NSE Selenium + NSE CSV + Trendlyne + Moneycontrol + scanx.trade
+Bulk & Block Deal Scanner v3 - FINAL
+Sources: NseIndiaApi (PRIMARY) + Trendlyne + Moneycontrol + scanx.trade
 Mon-Sat always scan | Telegram + Email alerts
+Install: pip install nse requests beautifulsoup4 lxml selenium webdriver-manager
 """
 
 import os, time, logging, smtplib, json, hashlib
@@ -26,12 +27,12 @@ TARGET_KEYWORDS = [
     'HDFC MF','SBI MF','SBI MUTUAL','ICICI PRU','AXIS MF','KOTAK MF','NIPPON MF',
     'DSP MF','MIRAE','FRANKLIN','ADITYA BIRLA','BIRLA SUN LIFE','ADITYA BIRLA SUN',
     'UTI MF','TATA MF','EDELWEISS','INVESCO','SUNDARAM MF','QUANTUM MF','CANARA MF',
-    'LIC MF','HSBC MF','PGIM MF','BOI MF','UNION MF','HDFC MUTUAL',
+    'LIC MF','HSBC MF','PGIM MF','BOI MF','UNION MF','HDFC MUTUAL','MUTUAL FUND',
     'PARAG PARIKH','PPFAS','PPFCF','MOTILAL OSWAL','MOFSL','MOMF','MOAMC','WHITEOAK',
-    'QUANT MUTUAL','GROWW MF','NAVI MF','ZERODHA MF','MUTUAL FUND',
+    'QUANT MUTUAL','GROWW MF','NAVI MF','ZERODHA MF',
     'HDFC BANK','ICICI BANK','AXIS BANK','KOTAK BANK','STATE BANK','YES BANK',
     'INDUSIND','BANDHAN BANK','FEDERAL BANK','IDFC','RBL BANK',
-    'CANARA BANK','UNION BANK','BANK OF BARODA','BANK OF INDIA','PNB',
+    'CANARA BANK','UNION BANK','BANK OF BARODA','BANK OF INDIA','PNB','BANK',
     'LIC','LIFE INSURANCE','INSURANCE','BAJAJ ALLIANZ','SBI LIFE',
     'MAX LIFE','HDFC LIFE','KOTAK LIFE','TATA AIA','STAR HEALTH',
     'CARE HEALTH','NIVA BUPA','DIGIT INSURANCE','NEW INDIA','GIC',
@@ -40,11 +41,12 @@ TARGET_KEYWORDS = [
 ]
 
 ENTITY_TYPE = {
-    'mf':   ['MUTUAL FUND','SBI MF','HDFC MF','ICICI PRU','AXIS MF','KOTAK MF','NIPPON MF',
-             'DSP MF','MIRAE','FRANKLIN','ADITYA BIRLA','BIRLA SUN LIFE','UTI MF','TATA MF',
-             'EDELWEISS','INVESCO','SUNDARAM MF','QUANTUM MF','CANARA MF','LIC MF','HSBC MF',
-             'PGIM MF','BOI MF','UNION MF','HDFC MUTUAL','PPFAS','PPFCF','PARAG PARIKH',
-             'MOTILAL OSWAL','MOFSL','MOMF','MOAMC','WHITEOAK','QUANT MUTUAL','SBI MUTUAL'],
+    'mf':   ['MUTUAL FUND','SBI MF','SBI MUTUAL','HDFC MF','ICICI PRU','AXIS MF','KOTAK MF',
+             'NIPPON MF','DSP MF','MIRAE','FRANKLIN','ADITYA BIRLA','BIRLA SUN LIFE',
+             'UTI MF','TATA MF','EDELWEISS','INVESCO','SUNDARAM MF','QUANTUM MF',
+             'CANARA MF','LIC MF','HSBC MF','PGIM MF','BOI MF','UNION MF','HDFC MUTUAL',
+             'PPFAS','PPFCF','PARAG PARIKH','MOTILAL OSWAL','MOFSL','MOMF','MOAMC',
+             'WHITEOAK','QUANT MUTUAL'],
     'bank': ['BANK','HDFC BANK','ICICI BANK','AXIS BANK','KOTAK BANK','STATE BANK',
              'YES BANK','INDUSIND','BANDHAN','FEDERAL BANK','IDFC','RBL BANK',
              'CANARA BANK','UNION BANK','BANK OF BARODA','BANK OF INDIA','PNB'],
@@ -72,15 +74,60 @@ def deal_hash(d):
     key = f"{d['stock']}|{d['entity']}|{d['action']}|{d['qty']}|{d['price']}"
     return hashlib.md5(key.encode()).hexdigest()
 
-def get_scan_dates():
+def get_week_monday():
     today = date.today()
-    dates = []
-    for i in range(6):
-        d = today - timedelta(days=i)
-        if d.weekday() != 6:
-            dates.append(d)
-    return dates
+    return today - timedelta(days=today.weekday())
 
+# ─── SOURCE 1: NseIndiaApi (PRIMARY - replaces Selenium + CSV) ────────────
+def fetch_nse_api():
+    deals = []
+    try:
+        from nse import NSE
+        monday = get_week_monday()
+        today  = date.today()
+        log.info(f'NSE API: fetching {monday} to {today}')
+
+        with NSE('./') as nse:
+            for deal_type in ['bulk_deals', 'block_deals']:
+                try:
+                    dtype_short = 'bulk' if deal_type == 'bulk_deals' else 'block'
+                    rows = nse.bulkdeals(
+                        deal_type,
+                        fromdate=datetime.combine(monday, datetime.min.time()),
+                        todate=datetime.combine(today, datetime.min.time())
+                    )
+                    count = 0
+                    for row in rows:
+                        entity = row.get('BD_CLIENT_NAME', '')
+                        if not is_target(entity):
+                            continue
+                        try:
+                            qty   = int(str(row.get('BD_QTY_TRD', 0)).replace(',','') or 0)
+                            price = float(str(row.get('BD_TP_WATP', 0)).replace(',','') or 0)
+                        except:
+                            qty, price = 0, 0.0
+                        deals.append({
+                            'stock':  row.get('BD_SYMBOL', ''),
+                            'entity': entity,
+                            'etype':  classify_entity(entity),
+                            'dtype':  dtype_short,
+                            'action': 'BUY' if 'B' in str(row.get('BD_BUY_SELL','')).upper() else 'SELL',
+                            'qty':    qty,
+                            'price':  price,
+                            'date':   str(row.get('BD_DT_DATE', today)),
+                            'source': 'NSE API',
+                        })
+                        count += 1
+                    log.info(f'NSE API {deal_type}: {count} target deals')
+                except Exception as e:
+                    log.warning(f'NSE API {deal_type} error: {e}')
+    except ImportError:
+        log.warning('nse package not installed: pip install nse')
+    except Exception as e:
+        log.warning(f'NSE API error: {e}')
+    return deals
+
+# ─── SOURCE 2: Trendlyne ──────────────────────────────────────────────────
 def get_driver():
     from selenium import webdriver
     from selenium.webdriver.chrome.options import Options
@@ -97,81 +144,6 @@ def get_driver():
     driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=opts)
     driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     return driver
-
-def fetch_nse_selenium():
-    deals = []
-    try:
-        from selenium.webdriver.common.by import By
-        driver = get_driver()
-        for scan_date in get_scan_dates():
-            date_str = scan_date.strftime('%d-%m-%Y')
-            for deal_type in ['bulk', 'block']:
-                try:
-                    driver.get('https://www.nseindia.com')
-                    time.sleep(3)
-                    url = f'https://www.nseindia.com/api/{deal_type}-deals?from={date_str}&to={date_str}'
-                    driver.get(url)
-                    time.sleep(2)
-                    body = driver.find_element(By.TAG_NAME, 'body').text
-                    data = json.loads(body)
-                    for row in data.get('data', []):
-                        entity = row.get('clientName', '')
-                        if not is_target(entity):
-                            continue
-                        deals.append({
-                            'stock':  row.get('symbol', ''),
-                            'entity': entity,
-                            'etype':  classify_entity(entity),
-                            'dtype':  deal_type,
-                            'action': 'BUY' if 'B' in row.get('buySell', '').upper() else 'SELL',
-                            'qty':    int(row.get('quantityTraded', row.get('quantity', 0))),
-                            'price':  float(row.get('tradePrice', 0)),
-                            'date':   date_str,
-                            'source': 'NSE',
-                        })
-                except Exception as e:
-                    log.warning(f'NSE {deal_type} {date_str} selenium failed: {e}')
-        driver.quit()
-    except Exception as e:
-        log.warning(f'NSE Selenium error: {e}')
-    return deals
-
-def fetch_nse_csv():
-    deals = []
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0', 'Referer': 'https://www.nseindia.com/'}
-        for scan_date in get_scan_dates():
-            date_str = scan_date.strftime('%d%m%Y')
-            for dtype in ['bulk', 'block']:
-                url = f'https://archives.nseindia.com/corporate/{dtype}_deals_{date_str}.csv'
-                try:
-                    r = requests.get(url, headers=headers, timeout=15)
-                    if r.status_code != 200:
-                        log.warning(f'CSV {dtype} {date_str}: {r.status_code}')
-                        continue
-                    for line in r.text.strip().split('\n')[1:]:
-                        cols = [c.strip().strip('"') for c in line.split(',')]
-                        if len(cols) < 6:
-                            continue
-                        entity = cols[3] if len(cols) > 3 else ''
-                        if not is_target(entity):
-                            continue
-                        deals.append({
-                            'stock':  cols[1] if len(cols) > 1 else '',
-                            'entity': entity,
-                            'etype':  classify_entity(entity),
-                            'dtype':  dtype,
-                            'action': 'BUY' if 'B' in cols[4].upper() else 'SELL',
-                            'qty':    int(cols[5].replace(',', '')) if len(cols) > 5 else 0,
-                            'price':  float(cols[6].replace(',', '')) if len(cols) > 6 else 0,
-                            'date':   scan_date.strftime('%d-%m-%Y'),
-                            'source': 'NSE CSV',
-                        })
-                except Exception as e:
-                    log.warning(f'NSE CSV {dtype} {date_str}: {e}')
-    except Exception as e:
-        log.warning(f'NSE CSV error: {e}')
-    return deals
 
 def fetch_trendlyne():
     deals = []
@@ -193,7 +165,7 @@ def fetch_trendlyne():
             sym_idx    = next((i for i,h in enumerate(headers) if h in ('stock','symbol','scrip')), 0)
             client_idx = next((i for i,h in enumerate(headers) if 'client' in h or h == 'name'), 1)
             type_idx   = next((i for i,h in enumerate(headers) if 'deal type' in h or h == 'type'), 3)
-            bs_idx     = next((i for i,h in enumerate(headers) if h == 'action' or ('buy' in h and 'sell' not in h)), 4)
+            bs_idx     = next((i for i,h in enumerate(headers) if h == 'action'), 4)
             price_idx  = next((i for i,h in enumerate(headers) if 'price' in h or 'avg' in h), 6)
             qty_idx    = next((i for i,h in enumerate(headers) if 'quantity' in h or 'qty' in h), 7)
             for row in rows[1:]:
@@ -228,66 +200,7 @@ def fetch_trendlyne():
         log.warning(f'Trendlyne error: {e}')
     return deals
 
-def fetch_moneycontrol():
-    deals = []
-    try:
-        from selenium.webdriver.common.by import By
-        driver = get_driver()
-        driver.get('https://www.moneycontrol.com')
-        time.sleep(2)
-        for deal_type, url in [
-            ('bulk',  'https://www.moneycontrol.com/stocks/marketinfo/bulk_deals/index.php'),
-            ('block', 'https://www.moneycontrol.com/stocks/marketinfo/block_deals/index.php'),
-        ]:
-            try:
-                driver.get(url)
-                time.sleep(3)
-                soup = BeautifulSoup(driver.page_source, 'lxml')
-                for table in soup.find_all('table'):
-                    rows = table.find_all('tr')
-                    if len(rows) < 2:
-                        continue
-                    headers = [th.get_text(strip=True).lower() for th in rows[0].find_all(['th','td'])]
-                    if not any('symbol' in h or 'scrip' in h or 'stock' in h for h in headers):
-                        continue
-                    sym_idx    = next((i for i,h in enumerate(headers) if 'symbol' in h or 'scrip' in h or 'stock' in h), 0)
-                    client_idx = next((i for i,h in enumerate(headers) if 'client' in h or 'name' in h), 1)
-                    bs_idx     = next((i for i,h in enumerate(headers) if 'buy' in h or 'sell' in h or 'b/s' in h), 2)
-                    qty_idx    = next((i for i,h in enumerate(headers) if 'qty' in h or 'quant' in h), 3)
-                    price_idx  = next((i for i,h in enumerate(headers) if 'price' in h or 'rate' in h), 4)
-                    for row in rows[1:]:
-                        cols = [td.get_text(strip=True) for td in row.find_all('td')]
-                        if len(cols) < 3:
-                            continue
-                        entity = cols[client_idx] if client_idx < len(cols) else ''
-                        if not is_target(entity):
-                            continue
-                        try:
-                            qty   = int(cols[qty_idx].replace(',','').replace('-','0')) if qty_idx < len(cols) else 0
-                            price = float(cols[price_idx].replace(',','').replace('-','0')) if price_idx < len(cols) else 0.0
-                        except:
-                            qty, price = 0, 0.0
-                        bs_col = cols[bs_idx] if bs_idx < len(cols) else ''
-                        action = 'BUY' if 'B' in bs_col.upper() and 'SELL' not in bs_col.upper() else 'SELL'
-                        deals.append({
-                            'stock':  cols[sym_idx] if sym_idx < len(cols) else '',
-                            'entity': entity,
-                            'etype':  classify_entity(entity),
-                            'dtype':  deal_type,
-                            'action': action,
-                            'qty':    qty,
-                            'price':  price,
-                            'date':   str(date.today()),
-                            'source': 'Moneycontrol',
-                        })
-            except Exception as e:
-                log.warning(f'Moneycontrol {deal_type} failed: {e}')
-        driver.quit()
-        log.info(f'Moneycontrol: {len(deals)} target deals')
-    except Exception as e:
-        log.warning(f'Moneycontrol error: {e}')
-    return deals
-
+# ─── SOURCE 3: scanx.trade ────────────────────────────────────────────────
 def fetch_scanx():
     deals = []
     try:
@@ -349,24 +262,23 @@ def fetch_scanx():
         log.warning(f'scanx error: {e}')
     return deals
 
-# ─── TELEGRAM - NO PARSE_MODE, NO SPECIAL CHARS ───────────────────────────
+# ─── TELEGRAM - PLAIN TEXT ONLY ───────────────────────────────────────────
 def send_telegram(deals):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
         log.warning('Telegram: NOT SET')
         return
     icons = {'mf':'[MF]','bank':'[BANK]','ins':'[INS]','fii':'[FII]'}
     lines = [f"Block/Bulk Deal Alert - {date.today().strftime('%d %b %Y')}"]
-    lines.append(f"Total: {len(deals)} new deals")
+    lines.append(f"Total: {len(deals)} new deals | MF/Bank/INS/FII")
     lines.append("")
     for d in deals:
         icon = icons.get(d['etype'], '[OTHER]')
-        act  = 'BUY' if d['action'] == 'BUY' else 'SELL'
         val  = d['qty'] * d['price'] / 1e7
         lines.append(
             f"{icon} {d['stock']} [{d['dtype'].upper()}] {d.get('date','')}\n"
-            f"  {act} | {d['entity']}\n"
+            f"  {d['action']} | {d['entity']}\n"
             f"  Price: {d['price']:,.2f} | Qty: {d['qty']//1000}K | Val: {val:.1f}Cr\n"
-            f"  src: {d.get('source','')}\n"
+            f"  src: {d.get('source','')}"
         )
     msg = '\n'.join(lines)
     chunks = [msg[i:i+4000] for i in range(0, len(msg), 4000)]
@@ -378,7 +290,7 @@ def send_telegram(deals):
                 timeout=10
             )
             if r.status_code == 200:
-                log.info(f'Telegram: sent OK')
+                log.info('Telegram: sent OK')
             else:
                 log.error(f'Telegram failed: {r.status_code} {r.text}')
     except Exception as e:
@@ -421,12 +333,10 @@ def send_email(deals):
         log.error(f'Email failed: {e}')
 
 def scan_once():
-    log.info('=== Scanning: NSE + Trendlyne + Moneycontrol + scanx ===')
+    log.info('=== Scanning: NSE API + Trendlyne + scanx ===')
     all_deals = (
-        fetch_nse_selenium() +
-        fetch_nse_csv()      +
-        fetch_trendlyne()    +
-        fetch_moneycontrol() +
+        fetch_nse_api()   +
+        fetch_trendlyne() +
         fetch_scanx()
     )
     unique = {}
@@ -451,13 +361,13 @@ def scan_once():
 
 def main():
     log.info('Block/Bulk Deal Scanner v3 started')
-    log.info(f'Sources: NSE + NSE CSV + Trendlyne + Moneycontrol + scanx.trade')
-    log.info(f'Mode: Mon-Sat always scan | Telegram: {"OK" if TELEGRAM_TOKEN else "NOT SET"} | Email: {"OK" if EMAIL_FROM else "NOT SET"}')
+    log.info(f'Sources: NSE API + Trendlyne + scanx.trade')
+    log.info(f'Telegram: {"OK" if TELEGRAM_TOKEN else "NOT SET"} | Email: {"OK" if EMAIL_FROM else "NOT SET"}')
     while True:
         try:
             now = datetime.now()
             if now.weekday() == 6:
-                log.info('Sunday - skipping. Will resume Monday.')
+                log.info('Sunday - skipping.')
             else:
                 log.info(f'Scanning... ({now.strftime("%a %H:%M")})')
                 scan_once()
